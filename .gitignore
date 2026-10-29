@@ -1,0 +1,5 @@
+.env
+backend/.env
+backend/predictor.db
+__pycache__/
+.venv/

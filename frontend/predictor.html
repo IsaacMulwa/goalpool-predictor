@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GoalPool Match Predictor</title>
+<style>
+  :root {
+    --text: #1f2328;
+    --muted: #59636e;
+    --border: #d8dee4;
+    --surface: #f6f8fa;
+    --home: #1a7f37;
+    --draw: #8c959f;
+    --away: #cf222e;
+    --hi: #116329;
+    --mid: #c8ecd2;
+    --accent: #1a7f37;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: #fff;
+    color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-size: 15px;
+    line-height: 1.5;
+  }
+  main { max-width: 760px; margin: 0 auto; padding: 20px 16px 40px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 16px; margin: 28px 0 8px; }
+  .sub { color: var(--muted); margin: 0 0 18px; font-size: 14px; }
+
+  form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+  label.full { grid-column: 1 / -1; }
+  select, input, button {
+    font: inherit;
+    padding: 9px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    background: #fff;
+  }
+  button {
+    grid-column: 1 / -1;
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button:disabled { opacity: .6; cursor: progress; }
+
+  .fixtures { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 6px; font-size: 13px; }
+  .fixtures span { color: var(--muted); width: 100%; }
+  .chip {
+    grid-column: auto;
+    padding: 3px 9px;
+    font-size: 13px;
+    font-weight: 400;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 999px;
+  }
+
+  .status { margin: 14px 0 0; padding: 10px 12px; border-radius: 6px; font-size: 14px; }
+  .status:empty { display: none; }
+  .status.wait { background: #fff8c5; }
+  .status.error { background: #ffebe9; color: #82071e; }
+
+  .matchup { font-size: 18px; font-weight: 600; margin: 24px 0 10px; }
+  .bar { display: flex; height: 34px; border-radius: 6px; overflow: hidden; }
+  .bar div {
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden;
+  }
+  .bar .h { background: var(--home); }
+  .bar .d { background: var(--draw); }
+  .bar .a { background: var(--away); }
+  .legend { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; color: var(--muted); margin-top: 6px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+
+  .score { margin-top: 16px; font-size: 16px; }
+  .score b { font-size: 22px; }
+  .muted { color: var(--muted); font-size: 13px; }
+
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { border: 1px solid var(--border); padding: 5px 6px; text-align: right; }
+  th { background: var(--surface); font-weight: 600; }
+  .breakdown th:first-child, .breakdown td:first-child { text-align: left; }
+  .breakdown tr.final td { font-weight: 700; }
+
+  ul { padding-left: 20px; margin: 0; }
+  li { margin-bottom: 6px; }
+  pre {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+    padding: 12px; overflow-x: auto; font-size: 13px; margin: 0;
+  }
+
+  .grid-wrap { overflow-x: auto; }
+  .grid { min-width: 520px; font-variant-numeric: tabular-nums; }
+  .grid td, .grid th { text-align: center; padding: 5px 2px; }
+  .grid td.mid { background: var(--mid); }
+  .grid td.hi { background: var(--hi); color: #fff; font-weight: 600; }
+  .grid td.best { outline: 2px solid var(--text); outline-offset: -2px; }
+  .grid caption { caption-side: top; text-align: left; color: var(--muted); padding-bottom: 6px; }
+
+  footer { margin-top: 32px; color: var(--muted); font-size: 12px; }
+
+  @media (max-width: 480px) {
+    form { grid-template-columns: 1fr; }
+    .legend { flex-direction: column; gap: 2px; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>Match Predictor</h1>
+  <p class="sub">Elo ratings + Dixon-Coles Poisson model, built from real match results. Every number behind the prediction is shown below it.</p>
+
+  <form id="form" autocomplete="off">
+    <label class="full">Competition
+      <select id="competition">
+        <option value="PL">Premier League (England)</option>
+        <option value="PD">La Liga (Spain)</option>
+        <option value="BL1">Bundesliga (Germany)</option>
+        <option value="SA">Serie A (Italy)</option>
+        <option value="FL1">Ligue 1 (France)</option>
+      </select>
+    </label>
+    <label>Home team
+      <input id="home" list="teams" placeholder="e.g. Arsenal" required>
+    </label>
+    <label>Away team
+      <input id="away" list="teams" placeholder="e.g. Chelsea" required>
+    </label>
+    <datalist id="teams"></datalist>
+    <button id="submit" type="submit">Predict</button>
+  </form>
+
+  <div id="fixtures" class="fixtures" hidden></div>
+  <div id="status" class="status" role="status" aria-live="polite"></div>
+  <section id="result" hidden></section>
+
+  <footer>Free tool. Predictions are statistical estimates, not betting advice.</footer>
+</main>
+
+<script>
+// =====================================================================
+// BACKEND URL: paste your deployed backend URL here (no trailing slash),
+// e.g. const API = "https://goalpool-predictor.onrender.com";
+// =====================================================================
+const API = "";
+
+const WAKE_DELAY_MS = 3000;
+const WAKE_MESSAGE = "Waking up… the prediction server sleeps when idle, so the first request can take up to a minute.";
+
+const $ = (id) => document.getElementById(id);
+const statusEl = $("status");
+
+function setStatus(text, kind) {
+  statusEl.textContent = text || "";
+  statusEl.className = "status" + (kind ? " " + kind : "");
+}
+
+function el(tag, attrs, children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === "text") node.textContent = v;
+    else if (k === "class") node.className = v;
+    else if (k === "style") node.style.cssText = v;
+    else node.setAttribute(k, v);
+  }
+  for (const child of [].concat(children || [])) node.append(child);
+  return node;
+}
+
+function pct(p, digits) {
+  return (p * 100).toFixed(digits === undefined ? 0 : digits) + "%";
+}
+
+function errorDetail(body, status) {
+  if (body && typeof body.detail === "string") return body.detail;
+  if (body && Array.isArray(body.detail)) return body.detail.map((d) => d.msg).join("; ");
+  return "Server error (" + status + ").";
+}
+
+async function api(path, options) {
+  if (!API) {
+    throw new Error("This page is not configured yet: set the API constant at the top of the script to the backend URL.");
+  }
+  const wakeTimer = setTimeout(() => setStatus(WAKE_MESSAGE, "wait"), WAKE_DELAY_MS);
+  try {
+    let res;
+    try {
+      res = await fetch(API.replace(/\/+$/, "") + path, options);
+    } catch (e) {
+      throw new Error("Could not reach the prediction server. Please try again in a moment.");
+    }
+    let body = null;
+    try { body = await res.json(); } catch (e) { /* non-JSON error page */ }
+    if (!res.ok) throw new Error(errorDetail(body, res.status));
+    return body;
+  } finally {
+    clearTimeout(wakeTimer);
+    if (statusEl.textContent === WAKE_MESSAGE) setStatus("");
+  }
+}
+
+// ---------------------------------------------------------------- fixtures
+
+async function loadFixtures() {
+  const comp = $("competition").value;
+  const box = $("fixtures");
+  box.hidden = true;
+  box.replaceChildren();
+  $("teams").replaceChildren();
+  let data;
+  try {
+    data = await api("/fixtures?competition=" + encodeURIComponent(comp));
+  } catch (e) {
+    return; // Fixtures are a convenience; /predict reports any real problem.
+  }
+  if (comp !== $("competition").value) return; // user switched competition meanwhile
+
+  const names = new Set();
+  data.fixtures.forEach((f) => { names.add(f.home); names.add(f.away); });
+  [...names].sort().forEach((n) => $("teams").append(el("option", { value: n })));
+
+  const upcoming = data.fixtures.slice(0, 10);
+  if (!upcoming.length) return;
+  box.append(el("span", { text: "Upcoming fixtures, tap to predict:" }));
+  upcoming.forEach((f) => {
+    const chip = el("button", { type: "button", class: "chip", text: f.home + " v " + f.away });
+    chip.addEventListener("click", () => {
+      $("home").value = f.home;
+      $("away").value = f.away;
+      predict();
+    });
+    box.append(chip);
+  });
+  box.hidden = false;
+}
+
+// ---------------------------------------------------------------- prediction
+
+async function predict() {
+  const comp = $("competition").value;
+  const home = $("home").value.trim();
+  const away = $("away").value.trim();
+  if (!home || !away) {
+    setStatus("Enter both a home and an away team.", "error");
+    return;
+  }
+  const qs = new URLSearchParams({ home, away, competition: comp });
+  $("submit").disabled = true;
+  setStatus("");
+  try {
+    const data = await api("/predict?" + qs.toString());
+    render(data);
+  } catch (e) {
+    $("result").hidden = true;
+    setStatus(e.message, "error");
+  } finally {
+    $("submit").disabled = false;
+  }
+}
+
+function render(d) {
+  const out = $("result");
+  out.replaceChildren();
+  const p = d.probabilities;
+
+  out.append(el("div", { class: "matchup", text: d.home + " vs " + d.away }));
+
+  const bar = el("div", { class: "bar", role: "img",
+    "aria-label": `${d.home} win ${pct(p.home)}, draw ${pct(p.draw)}, ${d.away} win ${pct(p.away)}` });
+  [["h", p.home], ["d", p.draw], ["a", p.away]].forEach(([cls, v]) => {
+    bar.append(el("div", { class: cls, style: "width:" + (v * 100) + "%", text: v >= 0.08 ? pct(v) : "" }));
+  });
+  out.append(bar);
+
+  const legendItem = (color, label) => el("div", {}, [el("i", { style: "background:var(" + color + ")" }), label]);
+  out.append(el("div", { class: "legend" }, [
+    legendItem("--home", d.home + " win " + pct(p.home)),
+    legendItem("--draw", "Draw " + pct(p.draw)),
+    legendItem("--away", d.away + " win " + pct(p.away)),
+  ]));
+
+  const best = d.top_scorelines[0];
+  out.append(el("div", { class: "score" }, [
+    "Most likely score: ",
+    el("b", { text: d.home + " " + d.most_likely_score + " " + d.away }),
+    el("span", { class: "muted", text: " (" + pct(best.prob, 1) + ")" }),
+  ]));
+  out.append(el("div", { class: "muted", text: "Next most likely: " +
+    d.top_scorelines.slice(1).map((s) => s.score + " (" + pct(s.prob, 1) + ")").join(", ") }));
+
+  out.append(el("h2", { text: "Model breakdown" }));
+  const breakdown = el("table", { class: "breakdown" });
+  breakdown.append(el("tr", {}, [
+    el("th", { text: "Model" }), el("th", { text: "Home" }), el("th", { text: "Draw" }), el("th", { text: "Away" }),
+  ]));
+  [["Dixon-Coles Poisson (70%)", d.probabilities_poisson, ""],
+   ["Elo (30%)", d.probabilities_elo, ""],
+   ["Final blend", d.probabilities, "final"]].forEach(([name, probs, cls]) => {
+    breakdown.append(el("tr", { class: cls }, [
+      el("td", { text: name }), el("td", { text: pct(probs.home, 1) }),
+      el("td", { text: pct(probs.draw, 1) }), el("td", { text: pct(probs.away, 1) }),
+    ]));
+  });
+  out.append(breakdown);
+
+  out.append(el("h2", { text: "Why" }));
+  out.append(el("ul", {}, d.explanation.map((s) => el("li", { text: s }))));
+
+  out.append(el("h2", { text: "Stats used" }));
+  out.append(el("pre", { text: JSON.stringify(d.stats_used, null, 2) }));
+
+  out.append(el("h2", { text: "Scoreline probabilities" }));
+  out.append(scoreGrid(d));
+
+  out.hidden = false;
+  setStatus("");
+}
+
+// grid[h][a] = P(home scores h, away scores a). Home goals across the top, away goals down the side.
+function scoreGrid(d) {
+  const size = d.grid.length;
+  const table = el("table", { class: "grid" });
+  table.append(el("caption", { text: "Columns: " + d.home + " goals. Rows: " + d.away + " goals." }));
+
+  const head = el("tr", {}, [el("th", { text: "Away ↓ / Home →" })]);
+  for (let h = 0; h < size; h++) head.append(el("th", { scope: "col", text: String(h) }));
+  table.append(head);
+
+  for (let a = 0; a < size; a++) {
+    const row = el("tr", {}, [el("th", { scope: "row", text: String(a) })]);
+    for (let h = 0; h < size; h++) {
+      const prob = d.grid[h][a];
+      let cls = prob > 0.08 ? "hi" : prob > 0.04 ? "mid" : "";
+      if (h + "-" + a === d.most_likely_score) cls += " best";
+      row.append(el("td", { class: cls.trim(), title: `${d.home} ${h}-${a} ${d.away}`, text: pct(prob, 1) }));
+    }
+    table.append(row);
+  }
+  return el("div", { class: "grid-wrap" }, [table]);
+}
+
+// ---------------------------------------------------------------- wiring
+
+$("form").addEventListener("submit", (e) => { e.preventDefault(); predict(); });
+$("competition").addEventListener("change", loadFixtures);
+
+// Allow deep links such as predictor.html?competition=PL&home=Arsenal&away=Chelsea
+(function init() {
+  const params = new URLSearchParams(location.search);
+  const comp = (params.get("competition") || "").toUpperCase();
+  if ([...$("competition").options].some((o) => o.value === comp)) $("competition").value = comp;
+  if (params.get("home")) $("home").value = params.get("home");
+  if (params.get("away")) $("away").value = params.get("away");
+  if (!API) {
+    setStatus("This page is not configured yet: set the API constant at the top of the script to the backend URL.", "error");
+    return;
+  }
+  loadFixtures();
+  if ($("home").value && $("away").value) predict();
+})();
+</script>
+</body>
+</html>
