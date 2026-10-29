@@ -159,21 +159,28 @@ filesystem, so it is wiped:
 - on **every deploy**, and
 - whenever the instance **restarts**, which includes waking up after the free tier's 15-minute idle sleep.
 
-The app recreates empty tables on startup. Until data is loaded again, `/predict` returns a 400
-telling you to call `/refresh`. After every deploy (and after any idle sleep) run:
+The app recreates empty tables on startup and then **reloads the data by itself**:
+
+- On startup, and on any `/predict` or `/fixtures` request, it checks whether any competition is
+  missing or older than `AUTO_REFRESH_HOURS` (default 6). If so, it refreshes those in the background.
+  That's one football-data.org call per competition, with the same 7-second spacing.
+- While the reload runs (about 35 seconds), `/predict` and `/fixtures` return **503 "Match data is
+  loading"**. `predictor.html` retries quietly behind its "Waking up…" message, so visitors just
+  wait a little longer.
+- If a reload fails (for example because of a bad key), it isn't retried for 10 minutes. The error
+  appears in Render's logs.
+- Set `AUTO_REFRESH_HOURS=0` to turn this off and rely on manual `/refresh` only.
+
+You can still force a reload at any time:
 
 ```bash
 curl -X POST "https://<your-service>.onrender.com/refresh?competition=ALL"
 ```
 
-To keep data loaded without manual work, set up a free external scheduler such as
-cron-job.org or UptimeRobot:
-
-- `GET https://<your-service>.onrender.com/health` every **10 minutes**. This stops the service
-  from sleeping, so the database survives between deploys. One always-on service fits within
-  Render's 750 free instance-hours a month.
-- `POST https://<your-service>.onrender.com/refresh?competition=ALL` every **6–12 hours**. This
-  picks up new results and re-seeds after any restart.
+Optional: if a free scheduler such as cron-job.org or UptimeRobot calls
+`GET https://<your-service>.onrender.com/health` every **10 minutes**, the service never sleeps.
+Visitors then never wait for a cold start. One always-on service fits within Render's 750 free
+instance-hours a month.
 
 `/refresh` is public by design (there's no authentication in v1). The built-in 7-second spacing
 means repeated calls can't break football-data.org's rate limit.

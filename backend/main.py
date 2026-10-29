@@ -4,6 +4,8 @@ import threading
 import time
 import unicodedata
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+
 from dotenv import load_dotenv
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -24,15 +26,75 @@ POISSON_WEIGHT = 0.7
 ELO_WEIGHT = 0.3
 CACHE_TTL_SECONDS = 6 * 3600  # time decay is relative to "now", so refit a few times a day
 LOW_SAMPLE_MATCHES = 5
+# Render's free tier wipes predictor.db whenever the instance restarts (every deploy and every
+# wake-up from idle), so the app reloads missing or stale competitions by itself in the
+# background. Set AUTO_REFRESH_HOURS=0 to disable and rely on POST /refresh only.
+AUTO_REFRESH_HOURS = float(os.getenv("AUTO_REFRESH_HOURS", "6"))
+AUTO_REFRESH_CHECK_SECONDS = 60
+AUTO_REFRESH_RETRY_SECONDS = 600  # after a failed attempt, don't hammer the API
 
 _cache = {}
 _cache_generation = 0
 _cache_lock = threading.Lock()
 
+_auto_lock = threading.Lock()
+_auto_running = False
+_auto_last_check = 0.0
+_auto_last_attempt = 0.0
+
+
+def _stale_competitions():
+    cutoff = time.time() - AUTO_REFRESH_HOURS * 3600
+    refreshed = db.last_refreshed()
+    return [
+        code for code in data_fetch.COMPETITIONS
+        if code not in refreshed
+        or datetime.fromisoformat(refreshed[code].replace("Z", "+00:00")).timestamp() < cutoff
+    ]
+
+
+def _maybe_auto_refresh():
+    """Start a background reload of missing/stale competitions, at most one at a time."""
+    global _auto_running, _auto_last_check, _auto_last_attempt
+    if AUTO_REFRESH_HOURS <= 0 or not os.getenv("FOOTBALL_DATA_API_KEY", "").strip():
+        return
+    now = time.time()
+    with _auto_lock:
+        if _auto_running or now - _auto_last_check < AUTO_REFRESH_CHECK_SECONDS:
+            return
+        _auto_last_check = now
+        if now - _auto_last_attempt < AUTO_REFRESH_RETRY_SECONDS:
+            return
+        codes = _stale_competitions()
+        if not codes:
+            return
+        _auto_running = True
+        _auto_last_attempt = now
+    threading.Thread(target=_auto_refresh, args=(codes,), daemon=True).start()
+
+
+def _auto_refresh(codes):
+    global _auto_running
+    try:
+        data_fetch.refresh(codes)
+    except data_fetch.FetchError as exc:
+        print(f"Auto-refresh failed: {exc}", flush=True)
+    finally:
+        _clear_cache()
+        with _auto_lock:
+            _auto_running = False
+
+
+def _loading_error():
+    return HTTPException(
+        503, "Match data is loading because the server has just started. Please try again in about a minute."
+    )
+
 
 @asynccontextmanager
 async def lifespan(_app):
     db.init()
+    _maybe_auto_refresh()
     yield
 
 
@@ -93,6 +155,8 @@ def _get_model(comp):
 
     season = db.current_season(comp)
     if season is None:
+        if _auto_running:
+            raise _loading_error()
         raise HTTPException(400, f"No {comp} matches are stored. {_refresh_hint(comp)}")
 
     matches = db.finished_matches(comp, season)
@@ -304,7 +368,10 @@ def refresh(
 @app.get("/fixtures")
 def fixtures(competition: str = "PL"):
     comp = _competition(competition)
+    _maybe_auto_refresh()
     if db.count_matches(comp) == 0:
+        if _auto_running:
+            raise _loading_error()
         raise HTTPException(400, f"No {comp} matches are stored. {_refresh_hint(comp)}")
     return {"fixtures": db.upcoming_fixtures(comp)}
 
@@ -312,6 +379,7 @@ def fixtures(competition: str = "PL"):
 @app.get("/predict")
 def predict(home: str, away: str, competition: str = "PL"):
     comp = _competition(competition)
+    _maybe_auto_refresh()
     model = _get_model(comp)
     home_team = _resolve_team(home, model["teams"], comp, "home")
     away_team = _resolve_team(away, model["teams"], comp, "away")

@@ -118,6 +118,15 @@ def upsert_matches(competition, rows):
     return len(rows)
 
 
+def last_refreshed():
+    """{competition: last upsert time as a UTC ISO string} for every stored competition."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT competition, MAX(updated_at) FROM matches GROUP BY competition"
+        ).fetchall()
+    return {r[0]: r[1] for r in rows}
+
+
 def count_matches(competition):
     """All stored matches for a competition, any status."""
     with connect() as conn:

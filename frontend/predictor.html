@@ -152,9 +152,12 @@
 // BACKEND URL: paste your deployed backend URL here (no trailing slash),
 // e.g. const API = "https://goalpool-predictor.onrender.com";
 // =====================================================================
-const API = "";
+const API = "https://goalpool-predictor.onrender.com";
 
 const WAKE_DELAY_MS = 3000;
+// 503 = the server just woke up and is still reloading match data; retry quietly.
+const LOADING_RETRY_MS = 10000;
+const LOADING_MAX_RETRIES = 9;
 const WAKE_MESSAGE = "Waking up… the prediction server sleeps when idle, so the first request can take up to a minute.";
 
 const $ = (id) => document.getElementById(id);
@@ -193,16 +196,23 @@ async function api(path, options) {
   }
   const wakeTimer = setTimeout(() => setStatus(WAKE_MESSAGE, "wait"), WAKE_DELAY_MS);
   try {
-    let res;
-    try {
-      res = await fetch(API.replace(/\/+$/, "") + path, options);
-    } catch (e) {
-      throw new Error("Could not reach the prediction server. Please try again in a moment.");
+    for (let attempt = 0; ; attempt++) {
+      let res;
+      try {
+        res = await fetch(API.replace(/\/+$/, "") + path, options);
+      } catch (e) {
+        throw new Error("Could not reach the prediction server. Please try again in a moment.");
+      }
+      let body = null;
+      try { body = await res.json(); } catch (e) { /* non-JSON error page */ }
+      if (res.status === 503 && attempt < LOADING_MAX_RETRIES) {
+        setStatus(WAKE_MESSAGE, "wait");
+        await new Promise((resolve) => setTimeout(resolve, LOADING_RETRY_MS));
+        continue;
+      }
+      if (!res.ok) throw new Error(errorDetail(body, res.status));
+      return body;
     }
-    let body = null;
-    try { body = await res.json(); } catch (e) { /* non-JSON error page */ }
-    if (!res.ok) throw new Error(errorDetail(body, res.status));
-    return body;
   } finally {
     clearTimeout(wakeTimer);
     if (statusEl.textContent === WAKE_MESSAGE) setStatus("");
