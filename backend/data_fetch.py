@@ -54,10 +54,11 @@ def _quota_reset_seconds(resp):
     return reset if available <= 0 or resp.status_code == 429 else 0
 
 
-def fetch_matches(code):
-    """Return the raw match list for the competition's current season."""
+def fetch_matches(code, season=None):
+    """Return the raw match list for one season (start year), or the current season if None."""
     global _next_call_at
     key = _api_key()
+    params = {"season": season} if season else {}
 
     with _call_lock:
         if _next_call_at is not None:
@@ -69,6 +70,7 @@ def fetch_matches(code):
             resp = requests.get(
                 f"{BASE_URL}/competitions/{code}/matches",
                 headers={"X-Auth-Token": key},
+                params=params,
                 timeout=REQUEST_TIMEOUT,
             )
             delay = max(delay, _quota_reset_seconds(resp) + 1)
@@ -112,10 +114,22 @@ def _normalise(match):
     }
 
 
+def _rows(raw_matches):
+    return [r for r in (_normalise(m) for m in raw_matches) if r]
+
+
 def refresh(codes):
-    """Fetch and upsert each competition's current season. Returns {code: rows_upserted}."""
+    """Fetch and upsert each competition's current season plus last season (the model's
+    fading head start). Last season is skipped once it is stored complete, since
+    finished seasons don't change. Both seasons are written together, so a
+    prediction never sees one without the other. Returns {code: rows_upserted}."""
     counts = {}
     for code in codes:
-        rows = [r for r in (_normalise(m) for m in fetch_matches(code)) if r]
+        rows = _rows(fetch_matches(code))
+        seasons = [r["season"] for r in rows if r["season"]]
+        if seasons:
+            previous = str(int(max(seasons)) - 1)
+            if not db.season_is_complete(code, previous):
+                rows += _rows(fetch_matches(code, previous))
         counts[code] = db.upsert_matches(code, rows)
     return counts

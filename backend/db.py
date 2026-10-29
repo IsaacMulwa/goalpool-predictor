@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "predictor.db")
 
 UPCOMING_STATUSES = ("SCHEDULED", "TIMED")
+PENDING_STATUSES = ("SCHEDULED", "TIMED", "IN_PLAY", "PAUSED", "POSTPONED", "SUSPENDED")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS teams (
@@ -125,6 +126,52 @@ def last_refreshed():
             "SELECT competition, MAX(updated_at) FROM matches GROUP BY competition"
         ).fetchall()
     return {r[0]: r[1] for r in rows}
+
+
+def season_is_complete(competition, season):
+    """True if the season is stored and none of its matches is still to be played."""
+    with connect() as conn:
+        finished, pending = conn.execute(
+            f"""
+            SELECT SUM(status = 'FINISHED'),
+                   SUM(status IN ({",".join("?" * len(PENDING_STATUSES))}))
+            FROM matches WHERE competition = ? AND season = ?
+            """,
+            (*PENDING_STATUSES, competition, season),
+        ).fetchone()
+    return bool(finished) and not pending
+
+
+def recent_form(competition, season, team_id, limit=5):
+    """The team's last `limit` finished matches of the season, newest first."""
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT m.utc_date, m.home_team_id, m.home_goals, m.away_goals,
+                   h.name AS home_name, a.name AS away_name
+            FROM matches m
+            JOIN teams h ON h.id = m.home_team_id
+            JOIN teams a ON a.id = m.away_team_id
+            WHERE m.competition = ? AND m.season = ? AND m.status = 'FINISHED'
+              AND ? IN (m.home_team_id, m.away_team_id)
+              AND m.home_goals IS NOT NULL AND m.away_goals IS NOT NULL
+            ORDER BY m.utc_date DESC, m.id DESC
+            LIMIT ?
+            """,
+            (competition, season, team_id, limit),
+        ).fetchall()
+    form = []
+    for r in rows:
+        at_home = r["home_team_id"] == team_id
+        goals_for, goals_against = (r["home_goals"], r["away_goals"]) if at_home else (r["away_goals"], r["home_goals"])
+        form.append({
+            "date": r["utc_date"][:10],
+            "venue": "H" if at_home else "A",
+            "opponent": r["away_name"] if at_home else r["home_name"],
+            "score": f"{goals_for}-{goals_against}",
+            "result": "W" if goals_for > goals_against else "D" if goals_for == goals_against else "L",
+        })
+    return form
 
 
 def count_matches(competition):

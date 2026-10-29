@@ -220,6 +220,28 @@
     color: #fde3a7; font-weight: 500; font-size: .93rem;
   }
   .verdict .bi { color: var(--gold); }
+  .honesty { margin-top: 12px; display: flex; gap: 8px; align-items: flex-start; color: var(--faint); font-size: .8rem; }
+
+  /* ---------- recent form ---------- */
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+  .form-team { font-family: var(--display); font-weight: 700; font-size: .98rem; margin-bottom: 10px; }
+  .form-team small { display: block; color: var(--faint); font-family: 'Inter', sans-serif; font-weight: 500; font-size: .78rem; margin-top: 2px; }
+  .badges { display: flex; gap: 5px; margin-bottom: 12px; }
+  .res {
+    width: 28px; height: 28px; flex: none; display: inline-flex; align-items: center; justify-content: center;
+    font: 800 .8rem var(--display); color: #04150a;
+  }
+  .res.W { background: var(--accent); }
+  .res.D { background: var(--draw); color: #fff; }
+  .res.L { background: var(--danger); color: #fff; }
+  .form-list { list-style: none; padding: 0; margin: 0; font-size: .84rem; }
+  .form-list li { display: grid; grid-template-columns: 22px 1fr auto; gap: 8px; align-items: center; padding: 7px 0; border-top: 1px solid var(--border); }
+  .form-list .res { width: 22px; height: 22px; font-size: .7rem; }
+  .form-list .opp { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .form-list .opp span { color: var(--faint); }
+  .form-list .sc { font-family: var(--display); font-weight: 700; color: var(--muted); }
+  .form-empty { color: var(--faint); font-size: .85rem; }
+
   .alts { margin-top: 14px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; color: var(--faint); font-size: .8rem; }
   .alt { background: var(--surface); border: 1px solid var(--border); border-radius: 100px; padding: .22rem .7rem; color: var(--text); font-weight: 600; }
   .alt span { color: var(--faint); font-weight: 500; margin-left: 4px; }
@@ -289,6 +311,7 @@
     .team-name { font-size: .95rem; }
     .score { padding: 8px 12px; }
     .legend { font-size: .78rem; }
+    .form-grid { grid-template-columns: 1fr; }
   }
 </style>
 </head>
@@ -306,7 +329,7 @@
   <div class="wrap">
     <span class="eyebrow"><i class="bi bi-graph-up-arrow"></i> Match Predictor</span>
     <h1>Who wins this weekend?</h1>
-    <p>Free predictions built from this season's real results: Elo ratings plus a Dixon-Coles goals model. Every number behind the prediction is shown.</p>
+    <p>Free predictions from real results: this season's form, with last season as a fading head start. Every number behind the prediction is shown.</p>
   </div>
 </section>
 
@@ -356,7 +379,7 @@ const API = "https://goalpool-predictor.onrender.com";
 const WAKE_DELAY_MS = 3000;
 // 503 = the server just woke up and is still reloading match data; retry quietly.
 const LOADING_RETRY_MS = 10000;
-const LOADING_MAX_RETRIES = 9;
+const LOADING_MAX_RETRIES = 15;
 const WAKE_MESSAGE = "Waking up the prediction server… it sleeps when idle, so the first request can take up to a minute.";
 
 const $ = (id) => document.getElementById(id);
@@ -498,6 +521,7 @@ function render(d) {
   const reasons = d.explanation.filter((s) => s !== verdict);
 
   out.append(matchCard(d, verdict));
+  out.append(formCard(d));
 
   const breakdown = el("table", { class: "breakdown" });
   breakdown.append(el("tr", {}, [
@@ -571,17 +595,48 @@ function matchCard(d, verdict) {
   card.append(el("div", { class: "alts" }, ["Also likely:"].concat(
     d.top_scorelines.slice(1).map((s) => el("span", { class: "alt" }, [s.score, el("span", { text: pct(s.prob, 1) })]))
   )));
+  card.append(el("div", { class: "honesty" }, [
+    icon("info-circle"),
+    "Even the best models call only about half of all results right. These are probabilities, not certainties.",
+  ]));
   return card;
+}
+
+// form.home / form.away: last league games this season, newest first.
+function formCard(d) {
+  const column = (team, games) => {
+    if (!games.length) {
+      return el("div", {}, [el("div", { class: "form-team", text: team }), el("div", { class: "form-empty", text: "No league games yet this season." })]);
+    }
+    const points = games.reduce((sum, g) => sum + (g.result === "W" ? 3 : g.result === "D" ? 1 : 0), 0);
+    const oldestFirst = games.slice().reverse();
+    return el("div", {}, [
+      el("div", { class: "form-team" }, [team, el("small", { text: `${points} of ${3 * games.length} points · newest on the right` })]),
+      el("div", { class: "badges" }, oldestFirst.map((g) => el("span", { class: "res " + g.result, text: g.result, title: `${g.score} vs ${g.opponent}` }))),
+      el("ul", { class: "form-list" }, games.map((g) => {
+        const date = new Date(g.date + "T12:00:00Z").toLocaleDateString(undefined, { day: "numeric", month: "short" });
+        return el("li", {}, [
+          el("span", { class: "res " + g.result, text: g.result }),
+          el("span", { class: "opp" }, [(g.venue === "H" ? "vs " : "at ") + g.opponent, el("span", { text: " · " + date })]),
+          el("span", { class: "sc", text: g.score }),
+        ]);
+      })),
+    ]);
+  };
+  return el("div", { class: "card" }, [
+    cardTitle("activity", "Recent form", "Last league games this season"),
+    el("div", { class: "form-grid" }, [column(d.home, d.form.home), column(d.away, d.form.away)]),
+  ]);
 }
 
 function statsCard(d) {
   const s = d.stats_used;
   // [label, hint, home value, away value, higher is better?]
   const rows = [
-    ["Elo rating", "this season", s.elo_home, s.elo_away, true, 0],
+    ["Elo rating", "updated every result", s.elo_home, s.elo_away, true, 0],
     ["Expected goals", "for this match", s.lambda_home, s.lambda_away, true, 2],
-    ["Attack", "home / away form", s.attack_home, s.attack_away, true, 2],
-    ["Defence", "lower is better", s.defence_home, s.defence_away, false, 2],
+    ["Attack", "goals scored vs average", s.attack_home, s.attack_away, true, 2],
+    ["Defence", "goals conceded · lower is better", s.defence_home, s.defence_away, false, 2],
   ];
   const body = [
     cardTitle("bar-chart-line", "Stats used"),

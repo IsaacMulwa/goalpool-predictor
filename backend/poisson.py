@@ -5,8 +5,10 @@ from datetime import datetime, timezone
 
 import numpy as np
 
-HALF_LIFE_DAYS = 180.0
-SHRINK = 5.0
+# A match's weight halves every 90 days, so this season's form quickly outweighs last
+# season's, which is still included as a fading head start.
+HALF_LIFE_DAYS = 90.0
+SHRINK = 3.0
 RHO = -0.13
 MAX_GOALS = 8
 
@@ -17,40 +19,36 @@ def _parse_utc(value):
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
+def decay_weight(utc_date, now):
+    days_ago = max(0.0, (now - _parse_utc(utc_date)).total_seconds() / 86400.0)
+    return 0.5 ** (days_ago / HALF_LIFE_DAYS)
+
+
 def fit(matches, now=None):
     """matches: (utc_date, home_id, away_id, home_goals, away_goals) tuples.
 
-    Strengths are ratios to the league average (1.0 = average). For attack, above 1
-    means scores more; for defence, above 1 means concedes more (weaker)."""
+    Each team gets one attack and one defence strength from all its games (home and
+    away), as a ratio to the league average (1.0 = average): attack above 1 scores
+    more, defence above 1 concedes more (weaker). Home advantage comes from the
+    separate league home/away scoring averages."""
     now = now or datetime.now(timezone.utc)
 
     total_w = total_home_goals = total_away_goals = 0.0
-    home_scored = defaultdict(float)
-    home_conceded = defaultdict(float)
-    home_played = defaultdict(float)
-    away_scored = defaultdict(float)
-    away_conceded = defaultdict(float)
-    away_played = defaultdict(float)
-    home_count = defaultdict(int)
-    away_count = defaultdict(int)
+    scored = defaultdict(float)
+    conceded = defaultdict(float)
+    played = defaultdict(float)
+    count = defaultdict(int)
 
     for utc_date, home, away, hg, ag in matches:
-        days_ago = max(0.0, (now - _parse_utc(utc_date)).total_seconds() / 86400.0)
-        w = 0.5 ** (days_ago / HALF_LIFE_DAYS)
-
+        w = decay_weight(utc_date, now)
         total_w += w
         total_home_goals += w * hg
         total_away_goals += w * ag
-
-        home_scored[home] += w * hg
-        home_conceded[home] += w * ag
-        home_played[home] += w
-        home_count[home] += 1
-
-        away_scored[away] += w * ag
-        away_conceded[away] += w * hg
-        away_played[away] += w
-        away_count[away] += 1
+        for team, goals_for, goals_against in ((home, hg, ag), (away, ag, hg)):
+            scored[team] += w * goals_for
+            conceded[team] += w * goals_against
+            played[team] += w
+            count[team] += 1
 
     if total_w == 0:
         raise ValueError("No finished matches to fit.")
@@ -58,20 +56,17 @@ def fit(matches, now=None):
     league_away_avg = total_away_goals / total_w
     if league_home_avg == 0 or league_away_avg == 0:
         raise ValueError("League averages are zero; not enough scoring data to fit.")
+    avg = (league_home_avg + league_away_avg) / 2.0
 
-    def strength(scored, played, avg):
-        return (scored + SHRINK * avg) / (played + SHRINK) / avg
+    def strength(goals, games):
+        return (goals + SHRINK * avg) / (games + SHRINK) / avg
 
-    teams = set(home_played) | set(away_played)
     return {
         "league_home_avg": league_home_avg,
         "league_away_avg": league_away_avg,
-        "attack_home": {t: strength(home_scored[t], home_played[t], league_home_avg) for t in teams},
-        "defence_home": {t: strength(home_conceded[t], home_played[t], league_away_avg) for t in teams},
-        "attack_away": {t: strength(away_scored[t], away_played[t], league_away_avg) for t in teams},
-        "defence_away": {t: strength(away_conceded[t], away_played[t], league_home_avg) for t in teams},
-        "home_count": dict(home_count),
-        "away_count": dict(away_count),
+        "attack": {t: strength(scored[t], played[t]) for t in played},
+        "defence": {t: strength(conceded[t], played[t]) for t in played},
+        "count": dict(count),
     }
 
 
@@ -79,10 +74,10 @@ def team_strengths(model, home, away):
     """The four strengths that feed one fixture. A team with no history gets 1.0,
     which is exactly what the shrinkage formula gives for zero matches played."""
     return {
-        "attack_home": model["attack_home"].get(home, 1.0),
-        "defence_away": model["defence_away"].get(away, 1.0),
-        "attack_away": model["attack_away"].get(away, 1.0),
-        "defence_home": model["defence_home"].get(home, 1.0),
+        "attack_home": model["attack"].get(home, 1.0),
+        "defence_away": model["defence"].get(away, 1.0),
+        "attack_away": model["attack"].get(away, 1.0),
+        "defence_home": model["defence"].get(home, 1.0),
     }
 
 

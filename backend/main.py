@@ -25,7 +25,6 @@ MIN_FINISHED_MATCHES = 30
 POISSON_WEIGHT = 0.7
 ELO_WEIGHT = 0.3
 CACHE_TTL_SECONDS = 6 * 3600  # time decay is relative to "now", so refit a few times a day
-LOW_SAMPLE_MATCHES = 5
 # Render's free tier wipes predictor.db whenever the instance restarts (every deploy and every
 # wake-up from idle), so the app reloads missing or stale competitions by itself in the
 # background. Set AUTO_REFRESH_HOURS=0 to disable and rely on POST /refresh only.
@@ -142,11 +141,25 @@ def _clear_cache():
         _cache_generation += 1
 
 
-def _get_model(comp):
-    """Fitted Elo + Poisson for a competition, cached until the next refresh or TTL expiry.
+def fit_competition(current, previous, team_ids, now=None):
+    """Elo + Poisson for one competition: this season's finished matches, with last
+    season's as a fading head start. Elo starts from last season's regressed ratings;
+    the goals model includes last season's matches at their (small) decayed weight."""
+    now = now or datetime.now(timezone.utc)
+    start, promoted = elo.season_start_ratings(previous, team_ids)
+    weight_previous = sum(poisson.decay_weight(m[0], now) for m in previous)
+    weight_current = sum(poisson.decay_weight(m[0], now) for m in current)
+    total = weight_previous + weight_current
+    return {
+        "elo": elo.build_ratings(current, start=start),
+        "poisson": poisson.fit(previous + current, now=now),
+        "promoted": promoted,
+        "previous_share": weight_previous / total if total else 0.0,
+    }
 
-    Only the current (newest stored) season is used, so last season's form never
-    carries over: every team starts the season at Elo 1500 with average strengths."""
+
+def _get_model(comp):
+    """Fitted model for a competition, cached until the next refresh or TTL expiry."""
     with _cache_lock:
         entry = _cache.get(comp)
         if entry and time.time() - entry["built_at"] < CACHE_TTL_SECONDS:
@@ -159,25 +172,24 @@ def _get_model(comp):
             raise _loading_error()
         raise HTTPException(400, f"No {comp} matches are stored. {_refresh_hint(comp)}")
 
-    matches = db.finished_matches(comp, season)
-    if len(matches) < MIN_FINISHED_MATCHES:
+    current = db.finished_matches(comp, season)
+    previous = db.finished_matches(comp, str(int(season) - 1))
+    if len(current) + len(previous) < MIN_FINISHED_MATCHES:
         raise HTTPException(
             400,
-            f"Only {len(matches)} {comp} matches of the {_season_label(season)} season have been "
-            f"played so far; at least {MIN_FINISHED_MATCHES} are needed. If the season has just "
-            f"started, predictions open after a few more matchdays; otherwise the operator should "
-            f"call POST /refresh?competition={comp}.",
+            f"Only {len(current) + len(previous)} finished {comp} matches are stored; at least "
+            f"{MIN_FINISHED_MATCHES} are needed. {_refresh_hint(comp)}",
         )
 
+    teams = db.teams_in_competition(comp, season)
     entry = {
         "built_at": time.time(),
         "season": season,
-        "match_count": len(matches),
-        "first_date": matches[0][0][:10],
-        "last_date": matches[-1][0][:10],
-        "elo": elo.build_ratings(matches),
-        "poisson": poisson.fit(matches),
-        "teams": db.teams_in_competition(comp, season),
+        "current_count": len(current),
+        "previous_count": len(previous),
+        "last_date": (current or previous)[-1][0][:10],
+        "teams": teams,
+        **fit_competition(current, previous, {t["id"] for t in teams}),
     }
     with _cache_lock:
         # Don't store a model built from data a concurrent /refresh has since replaced.
@@ -246,15 +258,35 @@ def _versus_average(value, verb_more, verb_less):
     return f"{abs(diff)}% {verb_more if diff > 0 else verb_less} goals than average"
 
 
-def _explain(comp, model, home, away, stats, p_poisson, p_elo, p_final, top):
+def _form_summary(team, form):
+    if not form:
+        return f"{team} haven't played yet this season"
+    points = sum(3 if f["result"] == "W" else 1 if f["result"] == "D" else 0 for f in form)
+    return f"{team} {' '.join(f['result'] for f in reversed(form))} ({points} of {3 * len(form)} points)"
+
+
+def _explain(comp, model, home, away, stats, p_poisson, p_elo, p_final, top, form):
     h, a = home["name"], away["name"]
-    pm = model["poisson"]
-    lines = [
-        f"Based only on this season's form: the {model['match_count']} {comp} matches of the "
-        f"{_season_label(model['season'])} season played so far ({model['first_date']} to "
-        f"{model['last_date']}). Last season's results are not used. Recent matches weigh more: a "
-        f"match played {int(poisson.HALF_LIFE_DAYS)} days ago counts half as much as one played today.",
-    ]
+    season = _season_label(model["season"])
+    if model["previous_count"]:
+        lines = [
+            f"Based on {model['current_count']} {comp} matches from this season ({season}, latest "
+            f"result {model['last_date']}) plus {model['previous_count']} from last season as a fading "
+            f"head start. A match's weight halves every {int(poisson.HALF_LIFE_DAYS)} days, so last "
+            f"season currently makes up {_pct(model['previous_share'])} of the goals data, and that "
+            f"drops every week as this season's form takes over.",
+        ]
+    else:
+        lines = [
+            f"Based on the {model['current_count']} {comp} matches of the {season} season played so "
+            f"far (latest result {model['last_date']}). Last season's results aren't stored, so this "
+            f"season alone is used.",
+        ]
+
+    lines.append(
+        f"Recent form, last league games (oldest to newest): {_form_summary(h, form['home'])}; "
+        f"{_form_summary(a, form['away'])}."
+    )
 
     diff = stats["elo_diff"]
     if diff == 0:
@@ -262,37 +294,32 @@ def _explain(comp, model, home, away, stats, p_poisson, p_elo, p_final, top):
     else:
         leader = h if diff > 0 else a
         gap = f"{leader} is {abs(diff)} points stronger"
+    carried = (
+        f" Each team started the season with {elo.SEASON_CARRY:.0%} of last season's rating, then every "
+        f"result this season moved it." if model["previous_count"] else ""
+    )
     lines.append(
-        f"Elo ratings: {h} {stats['elo_home']}, {a} {stats['elo_away']}. {gap}. Adding the "
+        f"Elo ratings: {h} {stats['elo_home']}, {a} {stats['elo_away']}. {gap}.{carried} Adding the "
         f"{int(elo.HOME_ADVANTAGE)}-point home advantage for {h}, Elo alone says "
         f"{_pct(p_elo['home'])} home / {_pct(p_elo['draw'])} draw / {_pct(p_elo['away'])} away."
     )
+    for team in (home, away):
+        if team["id"] in model["promoted"]:
+            lines.append(
+                f"{team['name']} were promoted, so they started from the level of the teams that went "
+                f"down, and their numbers rest mostly on this season's games."
+            )
 
     lines.append(
-        f"At home, {h} score {_versus_average(stats['attack_home'], 'more', 'fewer')} "
-        f"(attack {stats['attack_home']:.2f}), while away from home {a} concede "
-        f"{_versus_average(stats['defence_away'], 'more', 'fewer')} (defence {stats['defence_away']:.2f}; "
-        f"above 1.00 means leakier than average)."
+        f"{h} score {_versus_average(stats['attack_home'], 'more', 'fewer')} (attack "
+        f"{stats['attack_home']:.2f}) and concede {_versus_average(stats['defence_home'], 'more', 'fewer')} "
+        f"(defence {stats['defence_home']:.2f}; above 1.00 means leakier than average)."
     )
     lines.append(
-        f"Away from home, {a} score {_versus_average(stats['attack_away'], 'more', 'fewer')} "
-        f"(attack {stats['attack_away']:.2f}), while at home {h} concede "
-        f"{_versus_average(stats['defence_home'], 'more', 'fewer')} (defence {stats['defence_home']:.2f})."
+        f"{a} score {_versus_average(stats['attack_away'], 'more', 'fewer')} (attack "
+        f"{stats['attack_away']:.2f}) and concede {_versus_average(stats['defence_away'], 'more', 'fewer')} "
+        f"(defence {stats['defence_away']:.2f})."
     )
-
-    thin = [
-        f"{team} {count} {where} match{'es' if count != 1 else ''}"
-        for team, count, where in (
-            (h, pm["home_count"].get(home["id"], 0), "home"),
-            (a, pm["away_count"].get(away["id"], 0), "away"),
-        )
-        if count < LOW_SAMPLE_MATCHES
-    ]
-    if thin:
-        lines.append(
-            f"Small sample so far this season ({' and '.join(thin)}), so these strengths are "
-            f"pulled toward the league average until more games are played."
-        )
 
     lines.append(
         f"Multiplying these by the league averages ({stats['league_home_avg']:.2f} home goals and "
@@ -412,6 +439,10 @@ def predict(home: str, away: str, competition: str = "PL"):
         "league_away_avg": round(pm["league_away_avg"], 2),
     }
     top = [{"score": s["score"], "prob": round(s["prob"], 4)} for s in summary["top_scorelines"]]
+    form = {
+        "home": db.recent_form(comp, model["season"], home_team["id"]),
+        "away": db.recent_form(comp, model["season"], away_team["id"]),
+    }
 
     return {
         "home": home_team["name"],
@@ -424,5 +455,7 @@ def predict(home: str, away: str, competition: str = "PL"):
         "stats_used": stats,
         # grid[home_goals][away_goals], 0..8 each
         "grid": [[round(float(p), 5) for p in row] for row in grid],
-        "explanation": _explain(comp, model, home_team, away_team, stats, p_poisson, p_elo, p_final, top),
+        # Last 5 league games of this season per team, newest first
+        "form": form,
+        "explanation": _explain(comp, model, home_team, away_team, stats, p_poisson, p_elo, p_final, top, form),
     }

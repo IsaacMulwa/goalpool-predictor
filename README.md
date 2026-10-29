@@ -61,23 +61,23 @@ curl -X POST "http://localhost:8000/refresh?competition=SA"
 curl -X POST "http://localhost:8000/refresh?competition=FL1"
 ```
 
-Or load all five in one call. It takes about 30 seconds because calls are spaced 7 seconds apart:
+Or load all five in one call. The first time takes about 80 seconds, because calls are spaced
+7 seconds apart:
 
 ```bash
 curl -X POST "http://localhost:8000/refresh?competition=ALL"
 ```
 
-- Each competition costs exactly **one** football-data.org request, which returns every match of
-  the current season (finished and scheduled).
+- Each competition costs **two** football-data.org requests: the current season (finished and
+  scheduled matches) and last season, which the model uses as a fading head start. Once last
+  season is stored complete it isn't fetched again, so later refreshes cost one request each.
+- Both seasons are written together, so a prediction never sees one without the other.
 - The backend waits at least 7 seconds between football-data.org calls, even across separate
-  `/refresh` requests, so you can't exceed the free-tier limit.
+  `/refresh` requests. It also respects the API's own throttling headers, so you can't exceed
+  the free-tier limit.
 - Re-running a refresh is safe. Matches are upserted by ID, so results update and new matches are added.
-- **Predictions use the current season only.** Last season's results are never used, so a team
-  that struggled last year but is flying this year is rated on this year. If older matches are
-  still stored, they're ignored, because the model always uses the newest season in the database.
-- `/predict` needs at least **30 finished matches** in the current season. That's about 3
-  matchdays in PL, PD, SA and FL1 (10 games each) and 4 in BL1 (9 games). Until then, `/predict`
-  returns a 400 saying the season has only just started.
+- `/predict` needs at least **30 finished matches** across the two seasons, which last season's
+  data easily covers, so predictions work from matchday 1.
 
 ## 4. Testing
 
@@ -121,7 +121,7 @@ computed from your stored matches:
   the short name ("Man City") and the three-letter code ("MUN").
 - An unknown team returns **404** with the list of known teams. An ambiguous name such as
   "Manchester" returns **400** with the candidates.
-- Fewer than 30 finished matches in the current season returns **400**. If nothing is stored at
+- Fewer than 30 finished matches across both seasons returns **400**. If nothing is stored at
   all, the message tells you to call `/refresh` first.
 
 ## 5. Deploying to Render
@@ -164,7 +164,7 @@ The app recreates empty tables on startup and then **reloads the data by itself*
 - On startup, and on any `/predict` or `/fixtures` request, it checks whether any competition is
   missing or older than `AUTO_REFRESH_HOURS` (default 6). If so, it refreshes those in the background.
   That's one football-data.org call per competition, with the same 7-second spacing.
-- While the reload runs (about 35 seconds), `/predict` and `/fixtures` return **503 "Match data is
+- While the reload runs (about 80 seconds the first time), `/predict` and `/fixtures` return **503 "Match data is
   loading"**. `predictor.html` retries quietly behind its "Waking up…" message, so visitors just
   wait a little longer.
 - If a reload fails (for example because of a bad key), it isn't retried for 10 minutes. The error
@@ -220,30 +220,49 @@ On first load after the backend has slept, any request that takes longer than 3 
 
 ---
 
-## How the model works (v1)
+## How the model works (v2)
 
-**Data window: current season only.** Both layers are fitted only on finished matches of the
-newest stored season. Every team therefore starts the season level, at Elo 1500 and with
-league-average strengths, and is rated purely on what it has done this season.
+**Data window: this season, with last season as a fading head start.** This season's finished
+matches drive the prediction. Last season is included only as a starting point that fades: with
+only 8 or so games per team early in a season, a this-season-only model has too little data
+and pulls every team toward "average".
 
-**Layer 1: Elo.** Every team starts at 1500. All of this season's finished matches are replayed in date order with
-K = 20 and a 60-point home advantage. The home side's expected score is
+Why v2 replaced v1 (this season only): a walk-forward replay of the 2026/27 season was run on
+the 246 matches after each league's first 30 games. In it, each match was predicted using only
+games played before it. v1 called 44.3% of results correctly (log-loss 1.034), worse than
+"always pick the home team" (45.9%). v2 called 50.4% correctly (log-loss 1.000). Weighting
+recent games more heavily without the head start did not help (46–48%).
+
+**Layer 1: Elo.** Each team starts the season at `1500 + ⅔ × (last season's final rating − 1500)`.
+Promoted teams start from the average final rating of the teams that went down. With no stored
+last season, everyone starts at 1500. This season's finished matches are then replayed in date
+order with K = 20 and a 60-point home advantage. The home side's expected score is
 `1 / (1 + 10^((elo_away − (elo_home + 60)) / 400))`, and each result moves both ratings by
 `20 × (actual − expected)`. To turn ratings into 1X2 probabilities, the draw probability is
 `0.28 × exp(−|elo_home − elo_away| / 300)`, which peaks at 0.28 when the two ratings are equal.
 The rest is split by the home side's expected score.
 
-**Layer 2: Dixon-Coles Poisson.** Each match is weighted by `0.5^(days_ago / 180)`. Weighted league
-average home and away goals are computed, and from them each team gets four strengths: home attack,
-home defence, away attack and away defence. Each strength is shrunk toward 1.0 with 5 pseudo-matches:
-`(weighted_scored + 5 × avg) / (weighted_played + 5) / avg`. Expected goals are then
-`λ_home = attack_home[home] × defence_away[away] × league_home_avg`, and the mirror image for the
-away side. The 0–0 to 8–8 grid is
+**Layer 2: Dixon-Coles Poisson.** Each match from either season is weighted by
+`0.5^(days_ago / 90)`, so a match's weight halves every 90 days. Last season therefore makes up
+about 40–45% of the data in late October, and this season's form dominates by mid-season. The
+share is reported in each prediction's explanation. Weighted league average home and away goals
+are computed. Each team gets one attack and one defence strength from all its games, home and
+away, relative to the league average and shrunk toward 1.0 with 3 pseudo-matches:
+`(weighted_goals + 3 × avg) / (weighted_played + 3) / avg`. Expected goals are then
+`λ_home = attack[home] × defence[away] × league_home_avg` and
+`λ_away = attack[away] × defence[home] × league_away_avg`. The 0–0 to 8–8 grid is
 `Poisson(x, λ_home) × Poisson(y, λ_away) × τ(x, y)`, with the Dixon-Coles correction
 (ρ = −0.13) applied to 0-0, 0-1, 1-0 and 1-1. The grid is then normalised to sum to 1. It is
 computed exactly; there is no simulation.
 
 **Blend.** Final 1X2 = 0.7 × Poisson + 0.3 × Elo. Scorelines come from the Poisson grid only.
+
+**Recent form.** `/predict` also returns `form.home` and `form.away`: each team's last five league
+games this season (newest first), with date, venue, opponent, score and W/D/L. The page shows
+these so readers can check the prediction against what the teams have actually been doing.
+
+**Expectations.** Even the best models and bookmakers call only about 50–55% of match results
+correctly, and a draw is almost never the single most likely outcome. The page says so.
 
 The fitted model is cached in memory per competition. The cache is cleared on every `/refresh`
 and rebuilt at least every 6 hours, because the time weights depend on today's date.
