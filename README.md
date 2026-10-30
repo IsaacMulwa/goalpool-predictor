@@ -17,8 +17,11 @@ goals, the probabilities from each model, the full 9×9 scoreline grid and a pla
 
 1. Register at <https://www.football-data.org/client/register>.
 2. The key (an "API token") is emailed to you and shown on your account page.
-3. On the free tier you can make **10 requests per minute**, and you get the major European leagues,
-   including the five this tool supports: `PL`, `PD`, `BL1`, `SA` and `FL1`.
+3. On the free tier you can make **10 requests per minute**. It covers all nine leagues this tool
+   supports: the top 5 (`PL` Premier League, `PD` La Liga, `BL1` Bundesliga, `SA` Serie A,
+   `FL1` Ligue 1) plus `ELC` Championship, `DED` Eredivisie, `PPL` Primeira Liga and `BSA`
+   Brasileirão Série A. The Champions League is also free but isn't included: the model would see
+   only each team's eight league-phase games, which is too little to rate them.
 
 ## 2. Local setup
 
@@ -61,7 +64,7 @@ curl -X POST "http://localhost:8000/refresh?competition=SA"
 curl -X POST "http://localhost:8000/refresh?competition=FL1"
 ```
 
-Or load all five in one call. The first time takes about 80 seconds, because calls are spaced
+Or load all nine in one call. The first time takes about 2 minutes, because calls are spaced
 7 seconds apart:
 
 ```bash
@@ -161,11 +164,11 @@ filesystem, so it is wiped:
 
 The app recreates empty tables on startup and then **reloads the data by itself**:
 
-- On startup, and on any `/predict` or `/fixtures` request, it checks whether any competition is
-  missing or older than `AUTO_REFRESH_HOURS` (default 6). If so, it refreshes those in the background.
-  That's one football-data.org call per competition, with the same 7-second spacing.
-- While the reload runs (about 80 seconds the first time), `/predict` and `/fixtures` return **503 "Match data is
-  loading"**. `predictor.html` retries quietly behind its "Waking up…" message, so visitors just
+- On startup, and on any `/predict`, `/fixtures` or `/picks` request, it checks whether any
+  competition is missing or older than `AUTO_REFRESH_HOURS` (default 3). If so, it refreshes those
+  in the background. That's one football-data.org call per competition, with the same 7-second spacing.
+- While the reload runs (about 2 minutes the first time; the top 5 leagues load first, in about
+  70 seconds), `/predict`, `/fixtures` and `/picks` return **503 "Match data is loading"**. `predictor.html` retries quietly behind its "Waking up…" message, so visitors just
   wait a little longer.
 - If a reload fails (for example because of a bad key), it isn't retried for 10 minutes. The error
   appears in Render's logs.
@@ -220,9 +223,34 @@ On first load after the backend has slept, any request that takes longer than 3 
 
 ---
 
+## Top picks (`GET /picks`)
+
+The page has a floating **Top picks** panel. It opens by default on screens 1500px or wider; on
+smaller screens it's a button in the bottom-right corner. It shows the model's safest calls each
+day from the top 5 leagues, then each pick's result once the game is played.
+
+- **Days** follow Kenyan time (EAT, UTC+3). For each day, every top-5-league fixture is scored on
+  four markets: home win or draw (1X), away win or draw (X2), over 1.5 goals and under 3.5 goals.
+  1X and X2 use the blended 1X2 probabilities; the goals markets use the Poisson scoreline grid.
+  Each fixture's pick is its most likely market, and the day's 5 most likely picks are shown.
+  A day with fewer than 5 fixtures shows them all.
+- **Fixed in advance.** A day's picks use only results that kicked off before the previous day
+  began. Those games have all been played and loaded before the day starts, so the picks can't
+  change once they're shown. Because they're recomputed the same way every time, the record
+  survives Render wiping the database. A day is marked "may still change" until 06:00 EAT the day
+  before, when the previous night's late results are in. One caveat: changing the model code
+  changes past picks too.
+- **What's returned:** the last 7 days with results (won, lost, live, or postponed, which is
+  void), today, and enough later days to show at least 5 games still to play. It also returns the
+  won/lost record over the period shown.
+- **How good is it?** In a replay of 1 Sep to 28 Oct 2026, picks chosen this way won 102 of 124
+  (82%), against an average stated chance of 86%. These are high-probability calls, not sure bets:
+  about 1 in 5 still loses, and the panel says so.
+
 ## How the model works (v2)
 
-**Data window: this season, with last season as a fading head start.** This season's finished
+**Data window: this season, with last season as a fading head start.** (Brasileirão seasons
+run within one calendar year, so its "last season" is the previous year.) This season's finished
 matches drive the prediction. Last season is included only as a starting point that fades: with
 only 8 or so games per team early in a season, a this-season-only model has too little data
 and pulls every team toward "average".

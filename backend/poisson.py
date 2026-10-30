@@ -130,3 +130,9 @@ def summarise(grid, top_n=5):
         "most_likely_score": top[0]["score"],
         "top_scorelines": top,
     }
+
+
+def total_goals_at_most(grid, goals):
+    """P(home goals + away goals <= goals) from a grid[x][y]."""
+    size = grid.shape[0]
+    return float(sum(grid[x, y] for x in range(size) for y in range(size) if x + y <= goals))

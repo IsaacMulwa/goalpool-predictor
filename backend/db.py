@@ -192,20 +192,40 @@ def current_season(competition):
     return row[0]
 
 
-def finished_matches(competition, season):
-    """Finished matches of one season as (utc_date, home_id, away_id, home_goals, away_goals), oldest first."""
+def finished_matches(competition, season, before=None):
+    """Finished matches of one season as (utc_date, home_id, away_id, home_goals, away_goals),
+    oldest first; only those kicking off before `before` (a UTC ISO string), if given."""
     with connect() as conn:
         rows = conn.execute(
-            """
+            f"""
             SELECT utc_date, home_team_id, away_team_id, home_goals, away_goals
             FROM matches
             WHERE competition = ? AND season = ? AND status = 'FINISHED'
               AND home_goals IS NOT NULL AND away_goals IS NOT NULL
+              {"AND utc_date < ?" if before else ""}
             ORDER BY utc_date, id
             """,
-            (competition, season),
+            (competition, season, before) if before else (competition, season),
         ).fetchall()
     return [tuple(r) for r in rows]
+
+
+def matches_between(competition, start, end):
+    """Every stored match (any status) kicking off in [start, end), UTC ISO strings, soonest first."""
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT m.id, m.season, m.utc_date, m.status, m.home_team_id, m.away_team_id,
+                   m.home_goals, m.away_goals, h.name AS home, a.name AS away
+            FROM matches m
+            JOIN teams h ON h.id = m.home_team_id
+            JOIN teams a ON a.id = m.away_team_id
+            WHERE m.competition = ? AND m.utc_date >= ? AND m.utc_date < ?
+            ORDER BY m.utc_date, m.id
+            """,
+            (competition, start, end),
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def teams_in_competition(competition, season):

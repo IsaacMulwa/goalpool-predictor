@@ -301,7 +301,77 @@
   .grid-key span { display: inline-flex; align-items: center; gap: 6px; }
   .grid-key i { width: 12px; height: 12px; display: inline-block; }
 
-  footer { border-top: 1px solid var(--border); padding: 22px 0 32px; color: var(--faint); font-size: .8rem; text-align: center; }
+  /* ---------- daily picks (floating) ---------- */
+  .picks-fab {
+    position: fixed; right: 16px; bottom: 16px; z-index: 30;
+    display: inline-flex; align-items: center; gap: 8px;
+    border: 0; border-radius: 100px; cursor: pointer;
+    background: var(--gold); color: #1d1404;
+    font: 700 .92rem 'Inter', sans-serif; padding: .72rem 1.1rem;
+    box-shadow: 0 8px 28px rgba(245, 185, 61, 0.35);
+    transition: transform .2s, box-shadow .2s;
+  }
+  .picks-fab:hover { transform: translateY(-2px); box-shadow: 0 10px 32px rgba(245, 185, 61, 0.5); }
+  .picks-fab .count { background: rgba(0, 0, 0, 0.18); border-radius: 100px; padding: 0 .5rem; font-size: .8rem; }
+  .picks-fab[hidden], .picks-panel[hidden] { display: none; }
+  .picks-panel {
+    position: fixed; right: 16px; bottom: 16px; z-index: 31;
+    width: 370px; max-width: calc(100vw - 32px); max-height: min(660px, calc(100vh - 94px));
+    display: flex; flex-direction: column;
+    background: rgba(15, 20, 32, 0.97);
+    backdrop-filter: blur(20px) saturate(140%); -webkit-backdrop-filter: blur(20px) saturate(140%);
+    border: 1px solid var(--border); box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+  }
+  .picks-head { display: flex; align-items: flex-start; gap: 10px; padding: 16px 16px 12px; border-bottom: 1px solid var(--border); }
+  .picks-head .ico {
+    width: 34px; height: 34px; flex: none; display: inline-flex; align-items: center; justify-content: center;
+    background: rgba(245, 185, 61, 0.14); color: var(--gold); border-radius: 10px;
+  }
+  .picks-head h2 { margin: 0; font-family: var(--display); font-weight: 700; font-size: 1.08rem; line-height: 1.2; }
+  .picks-head p { margin: 2px 0 0; color: var(--faint); font-size: .78rem; }
+  .picks-close {
+    margin-left: auto; flex: none; width: 32px; height: 32px; cursor: pointer;
+    background: transparent; border: 1px solid var(--border); border-radius: 50%; color: var(--muted);
+  }
+  .picks-close:hover { color: var(--text); border-color: var(--muted); }
+  .picks-tabs { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 1px solid var(--border); }
+  .picks-tabs button {
+    background: transparent; border: 0; border-bottom: 2px solid transparent; cursor: pointer;
+    color: var(--muted); font: 600 .86rem 'Inter', sans-serif; padding: 10px 0;
+  }
+  .picks-tabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--gold); }
+  .picks-body { overflow-y: auto; padding: 4px 16px 12px; flex: 1; }
+  .picks-record {
+    margin: 12px 0 4px; padding: 10px 12px; font-size: .84rem; color: var(--muted);
+    background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border);
+  }
+  .picks-record b { color: var(--text); font-family: var(--display); font-size: 1rem; }
+  .picks-day {
+    margin: 14px 0 4px; display: flex; align-items: center; gap: 8px;
+    color: var(--faint); font-size: .72rem; font-weight: 600; letter-spacing: .07em; text-transform: uppercase;
+  }
+  .picks-day .tag { text-transform: none; letter-spacing: 0; color: var(--gold); font-weight: 500; }
+  .pick {
+    display: block; width: 100%; text-align: left; cursor: pointer; font: inherit; color: inherit;
+    background: transparent; border: 0; border-top: 1px solid var(--border); padding: 10px 0;
+  }
+  .pick:hover .pick-teams { color: var(--accent); }
+  .pick-meta { display: flex; align-items: center; gap: 8px; color: var(--faint); font-size: .75rem; }
+  .pick-meta .lg { font-weight: 700; color: var(--muted); background: var(--surface-strong); padding: 0 .4rem; }
+  .pick-teams { font-weight: 600; font-size: .88rem; margin: 3px 0; transition: color .2s; }
+  .pick-line { display: flex; align-items: center; gap: 8px; font-size: .84rem; }
+  .pick-line .call { color: var(--gold); font-weight: 600; flex: 1; min-width: 0; }
+  .pick-line .chance { font-family: var(--display); font-weight: 700; color: var(--text); }
+  .outcome { font-size: .72rem; font-weight: 700; padding: .1rem .45rem; white-space: nowrap; }
+  .outcome.won { background: rgba(34, 197, 94, 0.18); color: #86efac; }
+  .outcome.lost { background: rgba(247, 92, 92, 0.18); color: #fca5a5; }
+  .outcome.live { background: rgba(245, 185, 61, 0.18); color: #fcd88a; }
+  .outcome.void, .outcome.upcoming { background: var(--surface-strong); color: var(--muted); }
+  .picks-empty { color: var(--faint); font-size: .86rem; padding: 18px 0; }
+  .picks-foot { padding: 10px 16px 14px; border-top: 1px solid var(--border); color: var(--faint); font-size: .74rem; display: flex; gap: 7px; }
+
+  /* bottom padding leaves room for the floating picks button */
+  footer { border-top: 1px solid var(--border); padding: 22px 0 84px; color: var(--faint); font-size: .8rem; text-align: center; }
   footer a { color: var(--muted); }
 
   @media (max-width: 560px) {
@@ -312,6 +382,7 @@
     .score { padding: 8px 12px; }
     .legend { font-size: .78rem; }
     .form-grid { grid-template-columns: 1fr; }
+    .picks-panel { right: 0; bottom: 0; left: 0; width: 100%; max-width: 100%; max-height: 82vh; border-width: 1px 0 0; }
   }
 </style>
 </head>
@@ -338,11 +409,19 @@
     <form id="form" class="form" autocomplete="off">
       <label class="full"><span>Competition</span>
         <select id="competition">
-          <option value="PL">Premier League (England)</option>
-          <option value="PD">La Liga (Spain)</option>
-          <option value="BL1">Bundesliga (Germany)</option>
-          <option value="SA">Serie A (Italy)</option>
-          <option value="FL1">Ligue 1 (France)</option>
+          <optgroup label="Top 5 leagues">
+            <option value="PL">Premier League (England)</option>
+            <option value="PD">La Liga (Spain)</option>
+            <option value="BL1">Bundesliga (Germany)</option>
+            <option value="SA">Serie A (Italy)</option>
+            <option value="FL1">Ligue 1 (France)</option>
+          </optgroup>
+          <optgroup label="More leagues">
+            <option value="ELC">Championship (England)</option>
+            <option value="DED">Eredivisie (Netherlands)</option>
+            <option value="PPL">Primeira Liga (Portugal)</option>
+            <option value="BSA">Brasileirão Série A (Brazil)</option>
+          </optgroup>
         </select>
       </label>
       <label><span>Home team</span>
@@ -368,6 +447,29 @@
     Data: football-data.org
   </div>
 </footer>
+
+<button id="picksFab" class="picks-fab" type="button" aria-controls="picksPanel" aria-expanded="false" hidden>
+  <i class="bi bi-fire"></i> Top picks <span id="picksCount" class="count"></span>
+</button>
+<aside id="picksPanel" class="picks-panel" aria-label="Top picks" hidden>
+  <div class="picks-head">
+    <span class="ico"><i class="bi bi-fire"></i></span>
+    <div>
+      <h2>Top picks</h2>
+      <p>The model's safest calls each day from the top 5 leagues</p>
+    </div>
+    <button id="picksClose" class="picks-close" type="button" aria-label="Close top picks"><i class="bi bi-x-lg"></i></button>
+  </div>
+  <div class="picks-tabs" role="tablist">
+    <button id="tabUpcoming" type="button" role="tab" aria-selected="true">Coming up</button>
+    <button id="tabResults" type="button" role="tab" aria-selected="false">Results</button>
+  </div>
+  <div id="picksBody" class="picks-body"></div>
+  <div class="picks-foot">
+    <i class="bi bi-info-circle"></i>
+    <span>Not sure bets: an 80% pick still loses 1 time in 5. Each day's picks are fixed in advance from earlier results, so they can't change after kick-off.</span>
+  </div>
+</aside>
 
 <script>
 // =====================================================================
@@ -683,6 +785,108 @@ function scoreGrid(d) {
   return el("div", { class: "grid-wrap" }, [table]);
 }
 
+// ---------------------------------------------------------------- top picks
+
+// Wide screens have room beside the page, so the panel starts open there.
+const PICKS_DOCKED_MIN_WIDTH = 1500;
+const OUTCOME_TEXT = { won: "Won", lost: "Lost", live: "Live", void: "Postponed" };
+let picksData = null;
+let picksTab = "upcoming";
+
+function setPicksOpen(open) {
+  $("picksPanel").hidden = !open;
+  $("picksFab").hidden = open;
+  $("picksFab").setAttribute("aria-expanded", String(open));
+}
+
+// Pick days are calendar dates (Kenyan time), so format them as dates, not instants.
+function formatDay(iso) {
+  return new Date(iso + "T12:00:00Z").toLocaleDateString(undefined, { timeZone: "UTC", weekday: "short", day: "numeric", month: "short" });
+}
+
+function dayLabel(iso) {
+  const diff = Math.round((Date.parse(iso) - Date.parse(picksData.today)) / 86400000);
+  const prefix = { "-1": "Yesterday · ", "0": "Today · ", "1": "Tomorrow · " }[diff] || "";
+  return prefix + formatDay(iso);
+}
+
+function pickRow(p) {
+  const kickoff = new Date(p.utc_date).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" });
+  const line = [el("span", { class: "call", text: p.pick }), el("span", { class: "chance", text: pct(p.probability) })];
+  if (OUTCOME_TEXT[p.outcome]) line.push(el("span", { class: "outcome " + p.outcome, text: OUTCOME_TEXT[p.outcome] }));
+  const row = el("button", { type: "button", class: "pick", title: "See the full prediction" }, [
+    el("div", { class: "pick-meta" }, [el("span", { class: "lg", text: p.competition }), kickoff]),
+    el("div", { class: "pick-teams", text: p.score ? `${p.home} ${p.score} ${p.away}` : `${p.home} v ${p.away}` }),
+    el("div", { class: "pick-line" }, line),
+  ]);
+  row.addEventListener("click", () => {
+    $("competition").value = p.competition;
+    $("home").value = p.home;
+    $("away").value = p.away;
+    loadFixtures();
+    predict();
+    if (window.innerWidth < PICKS_DOCKED_MIN_WIDTH) setPicksOpen(false);
+  });
+  return row;
+}
+
+function renderPicks() {
+  const body = $("picksBody");
+  body.replaceChildren();
+  const upcoming = picksTab === "upcoming";
+  $("tabUpcoming").setAttribute("aria-selected", String(upcoming));
+  $("tabResults").setAttribute("aria-selected", String(!upcoming));
+
+  if (!upcoming) {
+    const { won, lost, since } = picksData.record;
+    const settled = won + lost;
+    body.append(el("div", { class: "picks-record" }, settled
+      ? [el("b", { text: `${won} of ${settled}` }), ` picks won (${pct(won / settled)}) since ${formatDay(since)}`]
+      : "No results yet. They appear here once the games are played."));
+  }
+
+  const shows = upcoming
+    ? (p) => p.outcome === "upcoming" || p.outcome === "live"
+    : (p) => p.outcome === "won" || p.outcome === "lost" || p.outcome === "void";
+  const days = upcoming ? picksData.days : picksData.days.slice().reverse();
+  let shown = 0;
+  days.forEach((day) => {
+    const picks = day.picks.filter(shows);
+    if (!picks.length) return;
+    body.append(el("div", { class: "picks-day" }, [
+      dayLabel(day.date),
+      day.final ? "" : el("span", { class: "tag", text: "may still change", title: "Final from 06:00 the day before, once the previous night's results are in" }),
+    ]));
+    picks.forEach((p) => body.append(pickRow(p)));
+    shown += picks.length;
+  });
+  if (!shown) {
+    body.append(el("div", { class: "picks-empty", text: upcoming
+      ? "No top-5 league games in the next week."
+      : "No results yet. They appear here once the games are played." }));
+  }
+}
+
+async function loadPicks() {
+  $("picksBody").replaceChildren(el("div", { class: "picks-empty", text: "Loading picks…" }));
+  try {
+    picksData = await api("/picks");
+  } catch (e) {
+    $("picksBody").replaceChildren(el("div", { class: "picks-empty", text: "Top picks couldn't load. " + e.message }));
+    return;
+  }
+  const toPlay = picksData.days.reduce((n, d) => n + d.picks.filter((p) => p.outcome === "upcoming").length, 0);
+  $("picksCount").textContent = toPlay || "";
+  renderPicks();
+}
+
+$("picksFab").addEventListener("click", () => setPicksOpen(true));
+$("picksClose").addEventListener("click", () => setPicksOpen(false));
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("picksPanel").hidden) setPicksOpen(false); });
+[["tabUpcoming", "upcoming"], ["tabResults", "results"]].forEach(([id, tab]) => {
+  $(id).addEventListener("click", () => { picksTab = tab; if (picksData) renderPicks(); });
+});
+
 // ---------------------------------------------------------------- wiring
 
 $("form").addEventListener("submit", (e) => { e.preventDefault(); predict(); });
@@ -699,6 +903,8 @@ $("competition").addEventListener("change", loadFixtures);
     setStatus("This page is not configured yet: set the API constant at the top of the script to the backend URL.", "error");
     return;
   }
+  setPicksOpen(window.innerWidth >= PICKS_DOCKED_MIN_WIDTH);
+  loadPicks();
   loadFixtures();
   if ($("home").value && $("away").value) predict();
 })();

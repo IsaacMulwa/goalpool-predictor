@@ -1,4 +1,4 @@
-"""football-data.org v4 client. One API call per competition per refresh."""
+"""football-data.org v4 client. One or two API calls per competition per refresh."""
 import os
 import threading
 import time
@@ -15,7 +15,14 @@ COMPETITIONS = {
     "BL1": "Bundesliga",
     "SA": "Serie A",
     "FL1": "Ligue 1",
+    "ELC": "Championship",
+    "DED": "Eredivisie",
+    "PPL": "Primeira Liga",
+    "BSA": "Brasileirão Série A",
 }
+
+# Leagues whose season runs within one calendar year ("2026" rather than "2026/27").
+CALENDAR_YEAR_SEASONS = {"BSA"}
 
 # Free tier allows 10 requests/minute. Spacing every call by 7 seconds keeps us
 # under that, both between competitions in one refresh and across concurrent
